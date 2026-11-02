@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caelestia-doctor"
+version = "0.1.0"
+description = "Diagnose common Caelestia (Hyprland + Quickshell) problems and generate a ready-to-paste bug report"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Adam" }]
+keywords = ["caelestia", "hyprland", "quickshell", "arch", "dotfiles", "diagnostics"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.scripts]
+caelestia-doctor = "caelestia_doctor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
