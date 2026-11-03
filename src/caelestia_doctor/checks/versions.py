@@ -22,7 +22,11 @@ def run_checks() -> list[Result]:
     if p is None:
         results.append(Result(
             "caelestia CLI", FAIL, "`caelestia` command not found",
-            "Install caelestia-cli, or make sure it is on your PATH.",
+            "Without the CLI most Caelestia commands will not work.",
+            steps=["Install caelestia-cli by following the Caelestia install guide:",
+                 "https://github.com/caelestia-dots/caelestia",
+                 "If it is installed, check that its folder is on your PATH:",
+                 "$ which caelestia"],
         ))
     elif p.rc != 0:
         results.append(Result(
@@ -38,7 +42,8 @@ def run_checks() -> list[Result]:
     qs = run(["quickshell", "--version"]) or run(["qs", "--version"])
     if qs is None:
         results.append(Result("Quickshell", FAIL, "`quickshell` not found",
-                              "The Caelestia shell runs on Quickshell. Install it."))
+                              "The Caelestia shell runs on Quickshell.",
+                              steps=["Install Quickshell with your package manager or AUR helper."]))
     else:
         results.append(Result("Quickshell", OK, qs.out.splitlines()[0] if qs.out else "installed",
                               detail=qs.out))

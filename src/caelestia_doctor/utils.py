@@ -5,10 +5,21 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 OK, INFO, WARN, FAIL = "OK", "INFO", "WARN", "FAIL"
+
+
+@dataclass
+class Repair:
+    """A safe, deterministic repair for one diagnostic. `apply` edits `path` in place."""
+
+    path: Path
+    description: str
+    apply: Callable[[], None]
 
 
 @dataclass
@@ -20,6 +31,8 @@ class Result:
     message: str
     hint: str = ""
     detail: str = ""  # raw command output etc., only shown in `report`
+    steps: list[str] = field(default_factory=list)  # "$ command" lines are commands, others are notes
+    repair: Repair | None = None  # set only when the tool can fix it safely by itself
 
 
 @dataclass
@@ -67,3 +80,29 @@ def read_text(path: Path) -> str | None:
 
 def expand(p: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(p)))
+
+
+def short(path) -> str:
+    """Show a path with ~ instead of the home directory."""
+    h = str(home())
+    t = str(path)
+    return "~" + t[len(h):] if h != "/" and t.startswith(h) else t
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write a file so that it is either fully replaced or left untouched."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        try:
+            shutil.copymode(path, tmp)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

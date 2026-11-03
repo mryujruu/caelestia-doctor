@@ -2,29 +2,47 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 from pathlib import Path
 
-from ..utils import FAIL, INFO, OK, WARN, Result, config_dir, read_text, run
+from ..utils import FAIL, INFO, OK, WARN, Result, config_dir, read_text, run, short
 
 XKB_LIST = Path("/usr/share/X11/xkb/rules/base.lst")
 LAYOUT_RE = re.compile(r"""kb_layout\s*=\s*["']?([^"'\n},]+(?:,[^"'\n},]+)*)""")
+VERSION_RE = re.compile(r"Hyprland\s+v?(\d+)\.(\d+)")
 
 
-def valid_layouts(path: Path = XKB_LIST) -> set[str] | None:
-    """Layout codes known to xkb, or None if the list is not available."""
+def layout_names(path: Path = XKB_LIST) -> dict[str, str] | None:
+    """{code: description} of the layouts known to xkb, or None if the list is not available."""
     text = read_text(path)
     if text is None:
         return None
-    codes: set[str] = set()
+    names: dict[str, str] = {}
     in_section = False
     for line in text.splitlines():
         if line.startswith("!"):
             in_section = line.strip() == "! layout"
             continue
         if in_section and line.strip():
-            codes.add(line.split()[0])
-    return codes or None
+            parts = line.split(None, 1)
+            names[parts[0]] = parts[1].strip() if len(parts) > 1 else ""
+    return names or None
+
+
+def valid_layouts(path: Path = XKB_LIST) -> set[str] | None:
+    names = layout_names(path)
+    return set(names) if names else None
+
+
+def suggest_layouts(code: str, known: set[str]) -> list[str]:
+    """Closest valid codes for a wrong one (for example ar -> ara)."""
+    c = code.lower()
+    out = sorted((k for k in known if k.startswith(c) and k != c), key=lambda k: (len(k), k))[:3]
+    for k in difflib.get_close_matches(c, sorted(known), n=3, cutoff=0.6):
+        if k not in out:
+            out.append(k)
+    return out[:3]
 
 
 def split_codes(value: str) -> list[str]:
@@ -35,6 +53,16 @@ def find_layouts_in_text(text: str) -> list[list[str]]:
     return [split_codes(m.group(1)) for m in LAYOUT_RE.finditer(text)]
 
 
+def parse_version(text: str) -> tuple[int, int] | None:
+    m = VERSION_RE.search(text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def lua_is_used(version: tuple[int, int] | None) -> bool | None:
+    """Hyprland 0.55 and newer read hyprland.lua. None = unknown."""
+    return None if version is None else version >= (0, 55)
+
+
 def _config_files(hypr: Path, caelestia: Path):
     for root in (hypr, caelestia):
         if root.is_dir():
@@ -43,43 +71,72 @@ def _config_files(hypr: Path, caelestia: Path):
                     yield f
 
 
+def _layout_fix(bad: list[str], names: dict[str, str], where: str) -> list[str]:
+    fix: list[str] = []
+    for code in bad:
+        opts = suggest_layouts(code, set(names))
+        if opts:
+            shown = ", ".join(f"{o} ({names.get(o, '')})" if names.get(o) else o for o in opts)
+            fix.append(f"Instead of `{code}` you probably want: {shown}")
+    fix.append(f"Edit the kb_layout line in {where}, then apply it:")
+    fix.append("$ hyprctl reload")
+    fix.append("To browse every valid code:")
+    fix.append("$ localectl list-x11-keymap-layouts")
+    return fix
+
+
 def run_checks() -> list[Result]:
     results: list[Result] = []
     hypr = config_dir() / "hypr"
     lua, conf = hypr / "hyprland.lua", hypr / "hyprland.conf"
 
+    hv = run(["hyprctl", "version"])
+    version = parse_version(hv.out) if hv and hv.rc == 0 else None
+
     if lua.exists() and conf.exists():
-        results.append(Result(
-            "Hyprland config", WARN, "both hyprland.lua and hyprland.conf exist",
-            "Hyprland 0.55 and newer use the Lua config; older versions use .conf. "
-            "Only one is used, so edits to the other one will seem to do nothing.",
-        ))
+        used = lua_is_used(version)
+        if used is True:
+            results.append(Result(
+                "Hyprland config", WARN,
+                f"both hyprland.lua and hyprland.conf exist, and your Hyprland "
+                f"{version[0]}.{version[1]} uses the Lua one",
+                "hyprland.conf is probably ignored, so edits to it will seem to do nothing.",
+                steps=["If you are sure everything you need is in the Lua files, keep the old file as a backup:",
+                     f"$ mv {short(conf)} {short(conf)}.bak"],
+            ))
+        else:
+            results.append(Result(
+                "Hyprland config", WARN, "both hyprland.lua and hyprland.conf exist",
+                "Hyprland 0.55 and newer use the Lua config; older versions use .conf. "
+                "Only one is used, so edits to the other one will seem to do nothing.",
+                steps=["Check your version, then edit the matching file:", "$ hyprctl version"],
+            ))
     elif lua.exists():
         results.append(Result("Hyprland config", OK, "using hyprland.lua"))
     elif conf.exists():
         results.append(Result("Hyprland config", OK, "using hyprland.conf"))
     else:
-        results.append(Result("Hyprland config", INFO, f"no hyprland.lua / hyprland.conf in {hypr}"))
+        results.append(Result("Hyprland config", INFO, f"no hyprland.lua / hyprland.conf in {short(hypr)}"))
 
-    known = valid_layouts()
-    if known is None:
+    names = layout_names()
+    if names is None:
         results.append(Result("Keyboard layout", INFO,
                               f"cannot read {XKB_LIST}, skipping layout validation"))
         return results
+    known = set(names)
 
     # 1) what Hyprland is really using right now
     live = run(["hyprctl", "getoption", "input:kb_layout"])
     if live is not None and live.rc == 0:
         m = re.search(r"str:\s*(.*)", live.out)
         value = m.group(1).strip() if m else ""
-        codes = split_codes(value)
-        bad = [c for c in codes if c not in known]
+        bad = [c for c in split_codes(value) if c not in known]
         if bad:
             results.append(Result(
                 "Keyboard layout", FAIL,
-                f"active kb_layout \"{value}\" contains unknown code(s): {', '.join(bad)}",
-                "Hyprland falls back to US silently. Arabic is `ara`, not `ar`. "
-                "Valid codes are listed by: localectl list-x11-keymap-layouts",
+                f'active kb_layout "{value}" contains unknown code(s): {", ".join(bad)}',
+                "Hyprland falls back to US silently when a code is not valid.",
+                steps=_layout_fix(bad, names, "your Hyprland config"),
             ))
         else:
             results.append(Result("Keyboard layout", OK, f"active layout: {value or '(default)'}"))
@@ -97,9 +154,9 @@ def run_checks() -> list[Result]:
                 results.append(Result(
                     f"Keyboard layout in {f.name}", WARN,
                     f"unknown code(s) in kb_layout: {', '.join(bad)}",
-                    f"File: {f}. Check that this file is actually the one Hyprland loads.",
+                    f"File: {short(f)}. Make sure this is the file Hyprland really loads.",
+                    steps=_layout_fix(bad, names, short(f)),
                 ))
-    if live is None or live.rc != 0:
-        if not seen_bad:
-            results.append(Result("Keyboard layout", OK, "config files contain only valid layout codes"))
+    if (live is None or live.rc != 0) and not seen_bad:
+        results.append(Result("Keyboard layout", OK, "config files contain only valid layout codes"))
     return results

@@ -1,17 +1,21 @@
-"""Turn a list of Results into terminal text or a GitHub-ready Markdown report."""
+"""Turn a list of Results into pretty terminal text or a GitHub-ready Markdown report."""
 
 from __future__ import annotations
 
 import getpass
 import os
 import platform
-
-from .utils import FAIL, INFO, OK, WARN, Result, home, read_text
+import shutil
+import textwrap
 from pathlib import Path
 
-COLORS = {OK: "\033[32m", INFO: "\033[36m", WARN: "\033[33m", FAIL: "\033[31m"}
-RESET = "\033[0m"
+from .utils import FAIL, INFO, OK, WARN, Result, home, read_text
+
 ORDER = {FAIL: 0, WARN: 1, INFO: 2, OK: 3}
+GROUPS = {
+    FAIL: ("✖", "Problems", "31"),
+    WARN: ("⚠", "Warnings", "33"),
+}
 
 
 def redact(text: str) -> str:
@@ -35,19 +39,80 @@ def summary(results: list[Result]) -> dict[str, int]:
     return out
 
 
-def render_text(results: list[Result], color: bool = False) -> str:
-    lines = []
-    for r in sorted(results, key=lambda r: ORDER[r.status]):
-        tag = f"[{r.status}]".ljust(7)
-        if color:
-            tag = f"{COLORS[r.status]}{tag}{RESET}"
-        lines.append(f"{tag} {r.name}: {r.message}")
-        if r.hint and r.status in (WARN, FAIL):
-            lines.append(f"        → {r.hint}")
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def render_text(results: list[Result], color: bool = False, width: int | None = None) -> str:
+    from . import __version__
+
+    width = width or min(shutil.get_terminal_size((80, 20)).columns, 100)
+
+    def c(code: str, text: str) -> str:
+        return f"\033[{code}m{text}\033[0m" if color else text
+
+    out: list[str] = ["", c("1", f" caelestia-doctor {__version__}"),
+                      c("2", " read-only check: nothing on your system is changed"), ""]
+
+    for status in (FAIL, WARN):
+        group = [r for r in results if r.status == status]
+        if not group:
+            continue
+        icon, title, code = GROUPS[status]
+        out.append(c(f"{code};1", f" {icon} {title} ({len(group)})"))
+        out.append("")
+        for r in group:
+            bar = c(code, " │ ")
+            out.append(c(code, " ┌─ ") + c("1", r.name))
+            for line in textwrap.wrap(r.message, width - 5) or [""]:
+                out.append(bar + line)
+            if r.hint:
+                for line in textwrap.wrap(r.hint, width - 5):
+                    out.append(bar + c("2", line))
+            if r.steps:
+                out.append(bar)
+                out.append(bar + c("1;36", "What to do"))
+                for step in r.steps:
+                    if step.startswith("$ "):
+                        out.append(bar + "  " + c("36", step))
+                    else:
+                        for line in textwrap.wrap(step, width - 7):
+                            out.append(bar + "  " + line)
+            if r.repair:
+                out.append(bar)
+                out.append(bar + c("1;32", "Can be fixed automatically"))
+                for line in textwrap.wrap(r.repair.description, width - 7):
+                    out.append(bar + "  " + line)
+                out.append(bar + "  " + c("36", "$ caelestia-doctor fix"))
+            out.append(c(code, " └─"))
+            out.append("")
+
+    passed = [r for r in results if r.status in (OK, INFO)]
+    if passed:
+        out.append(c("32;1", f" ✔ Passed ({len(passed)})"))
+        for r in sorted(passed, key=lambda r: ORDER[r.status]):
+            mark = c("32", "✔") if r.status == OK else c("36", "ℹ")
+            line = f"{r.name}: {r.message}"
+            if len(line) > width - 6:
+                line = line[: width - 9] + "..."
+            out.append(f"   {mark} {line}")
+        out.append("")
+
     s = summary(results)
-    lines.append("")
-    lines.append(f"{s[FAIL]} problem(s), {s[WARN]} warning(s), {s[OK]} ok.")
-    return "\n".join(lines)
+    parts = [
+        c("31;1", _plural(s[FAIL], "problem")),
+        c("33;1", _plural(s[WARN], "warning")),
+        c("32;1", f"{s[OK] + s[INFO]} ok"),
+    ]
+    out.append(" " + c("2", "─" * min(width - 2, 40)))
+    out.append(" " + "  ·  ".join(parts))
+    if s[FAIL] or s[WARN]:
+        out.append(c("2", " Tip: `caelestia-doctor report` makes a version you can paste into a GitHub issue."))
+    n_repairs = sum(1 for r in results if r.repair and r.status in (FAIL, WARN))
+    if n_repairs:
+        out.append(c("2", f" {_plural(n_repairs, 'repair')} can be applied safely: run `caelestia-doctor fix`."))
+    out.append("")
+    return "\n".join(out)
 
 
 def _os_name() -> str:
@@ -71,11 +136,21 @@ def render_markdown(results: list[Result]) -> str:
         msg = r.message.replace("|", "\\|")
         md.append(f"| {r.status} | {r.name} | {msg} |")
 
-    hints = [r for r in results if r.hint and r.status in (WARN, FAIL)]
-    if hints:
-        md += ["", "#### Hints"]
-        for r in hints:
-            md.append(f"- **{r.name}**: {r.hint}")
+    notes = [r for r in results if (r.hint or r.steps or r.repair) and r.status in (WARN, FAIL)]
+    if notes:
+        md += ["", "#### Suggested fixes"]
+        for r in notes:
+            md += ["", f"**{r.name}**"]
+            if r.hint:
+                md.append(r.hint)
+            if r.repair:
+                md.append(f"- Automatic repair available (`caelestia-doctor fix`): {r.repair.description}")
+            cmds = [x[2:] for x in r.steps if x.startswith("$ ")]
+            for x in r.steps:
+                if not x.startswith("$ "):
+                    md.append(f"- {x}")
+            if cmds:
+                md += ["```sh", *cmds, "```"]
 
     details = [r for r in results if r.detail]
     if details:

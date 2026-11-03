@@ -74,3 +74,50 @@ def test_state_files_present_ok(tmp_path, monkeypatch):
     img.write_text("x")
     (d / "wallpaper" / "path.txt").write_text(str(img))
     assert all(r.status == OK for r in state.run_checks())
+
+
+def test_empty_json_offers_deterministic_repair(tmp_path, monkeypatch):
+    base = setup_home(tmp_path, monkeypatch)
+    path = base / "shell.json"
+    path.write_text("")
+
+    result = config.run_checks()[0]
+
+    assert result.repair is not None
+    assert result.repair.path == path
+    assert result.repair.description
+
+
+def test_wrong_case_path_is_detected_and_repaired(tmp_path, monkeypatch):
+    base = setup_home(tmp_path, monkeypatch)
+    (tmp_path / "Pictures" / "Wallpapers").mkdir(parents=True)
+    (tmp_path / "Pictures" / "Wallpapers" / "x.gif").write_text("gif")
+    cfg = base / "shell.json"
+    cfg.write_text('{\n  "paths": {\n    "mediaGif": "~/Pictures/wallpapers/x.gif"\n  },\n  "keep": 1\n}\n')
+
+    warn = [r for r in config.run_checks() if r.status == WARN][0]
+    assert "Wallpapers" in " ".join(warn.steps) and warn.repair is not None
+
+    from caelestia_doctor.repairs import apply_repair
+    backup = apply_repair(warn.repair)
+
+    data = json.loads(cfg.read_text())
+    assert data["paths"]["mediaGif"] == "~/Pictures/Wallpapers/x.gif" and data["keep"] == 1
+    assert "wallpapers" in backup.read_text()  # the backup is the original
+    assert not [r for r in config.run_checks() if r.status == WARN]  # and now it is clean
+
+
+def test_no_repair_when_nothing_matches(tmp_path, monkeypatch):
+    base = setup_home(tmp_path, monkeypatch)
+    (base / "shell.json").write_text('{"paths": {"mediaGif": "~/nowhere/x.gif"}}')
+    warn = [r for r in config.run_checks() if r.status == WARN][0]
+    assert warn.repair is None
+
+
+def test_repair_keeps_json_valid_even_for_odd_values(tmp_path):
+    cfg = tmp_path / "shell.json"
+    text = '{"paths": {"a": "/tmp/xx"}}'
+    cfg.write_text(text)
+    repair = config.make_path_repair(cfg, text, "a", "/tmp/xx", 'bad"quote\\')
+    repair.apply()  # json.dumps escapes the value, so the result is still valid JSON
+    assert json.loads(cfg.read_text())["paths"]["a"] == 'bad"quote\\'
