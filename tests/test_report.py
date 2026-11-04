@@ -1,4 +1,6 @@
-from caelestia_doctor.report import redact, render_markdown, render_text
+import json
+
+from caelestia_doctor.report import redact, render_json, render_markdown, render_text
 from caelestia_doctor.utils import FAIL, OK, WARN, Repair, Result
 
 
@@ -27,3 +29,10 @@ def test_markdown_has_code_block_for_commands():
 def test_redact_removes_home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     assert redact(f"see {tmp_path}/x") == "see ~/x"
+
+
+def test_json_report_is_machine_readable_and_redacts_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    report = json.loads(render_json([Result("x", WARN, f"missing in {tmp_path}/file")]))
+    assert report["checks"][0]["status"] == WARN
+    assert str(tmp_path) not in render_json([Result("x", WARN, f"missing in {tmp_path}/file")])

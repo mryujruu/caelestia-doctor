@@ -1,4 +1,7 @@
 import json
+import os
+
+import pytest
 
 from caelestia_doctor.checks import config, hyprland, state
 from caelestia_doctor.utils import FAIL, OK, WARN
@@ -88,6 +91,7 @@ def test_empty_json_offers_deterministic_repair(tmp_path, monkeypatch):
     assert result.repair.description
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows filesystems are usually case-insensitive")
 def test_wrong_case_path_is_detected_and_repaired(tmp_path, monkeypatch):
     base = setup_home(tmp_path, monkeypatch)
     (tmp_path / "Pictures" / "Wallpapers").mkdir(parents=True)

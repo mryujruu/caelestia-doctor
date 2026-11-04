@@ -82,6 +82,26 @@ def test_fix_refuses_when_not_interactive(tmp_path, monkeypatch):
     assert path.read_text() == ""
 
 
+def test_fix_all_applies_safe_repairs_without_prompt(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "shell.json"
+    path.write_text("")
+    calls = iter(([_empty_file_result(path)], [Result(path.name, OK, "valid")]))
+    monkeypatch.setattr(cli, "run_all", lambda: next(calls))
+
+    assert cli.main(["fix", "--all"]) == 0
+    assert path.read_text() == "{}\n"
+    assert "Auto-fixed" in capsys.readouterr().out
+
+
+def test_fix_dry_run_lists_repairs_without_prompt_or_change(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "shell.json"
+    path.write_text("")
+    monkeypatch.setattr(cli, "run_all", lambda: [_empty_file_result(path)])
+    assert cli.main(["fix", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "Dry run only" in out and not path.read_text()
+
+
 def test_check_exit_code_and_plain_output(monkeypatch, capsys):
     monkeypatch.setattr(cli, "run_all", lambda: [Result("x", FAIL, "broken", steps=["$ echo hi"])])
     assert cli.main(["--no-color", "check"]) == 1

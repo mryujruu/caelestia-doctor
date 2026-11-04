@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import platform
 import shutil
@@ -52,7 +53,7 @@ def render_text(results: list[Result], color: bool = False, width: int | None = 
         return f"\033[{code}m{text}\033[0m" if color else text
 
     out: list[str] = ["", c("1", f" caelestia-doctor {__version__}"),
-                      c("2", " read-only check: nothing on your system is changed"), ""]
+                      c("2", " nothing is changed unless you confirm it"), ""]
 
     for status in (FAIL, WARN):
         group = [r for r in results if r.status == status]
@@ -159,3 +160,28 @@ def render_markdown(results: list[Result]) -> str:
             md += [f"**{r.name}**", "```", r.detail, "```", ""]
         md.append("</details>")
     return redact("\n".join(md))
+
+
+def render_json(results: list[Result]) -> str:
+    """Machine-readable, redacted diagnostics for issue trackers and automation."""
+    records = []
+    for result in results:
+        records.append({
+            "status": result.status,
+            "name": result.name,
+            "message": result.message,
+            "hint": result.hint,
+            "detail": result.detail,
+            "steps": result.steps,
+            "repair_available": result.repair is not None,
+            "repair_description": result.repair.description if result.repair else None,
+        })
+    return redact(json.dumps({
+        "tool": "caelestia-doctor",
+        "os": _os_name(),
+        "kernel": platform.release(),
+        "session_type": os.environ.get("XDG_SESSION_TYPE", "?"),
+        "desktop": os.environ.get("XDG_CURRENT_DESKTOP", "?"),
+        "summary": summary(results),
+        "checks": records,
+    }, ensure_ascii=False, indent=2))

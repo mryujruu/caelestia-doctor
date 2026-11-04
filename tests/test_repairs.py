@@ -1,7 +1,9 @@
 import os
 import stat
 
-from caelestia_doctor.repairs import apply_repair
+import pytest
+
+from caelestia_doctor.repairs import apply_repair, undo_repair_backup
 from caelestia_doctor.utils import Repair, write_text_atomic
 
 
@@ -31,6 +33,31 @@ def test_backup_path_does_not_overwrite_existing_backup(tmp_path):
     assert second_backup.read_text() == ""
 
 
+def test_undo_restores_backup_and_backs_up_current_contents(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / ".config" / "caelestia" / "shell.json"
+    target.parent.mkdir(parents=True)
+    backup = target.with_name("shell.json.backup-20261103-123456")
+    backup.write_text("original")
+    target.write_text("current")
+    restored, current_backup = undo_repair_backup(backup, ask=lambda _p: "y", is_tty=True, say=lambda _s: None)
+    assert restored
+    assert target.read_text() == "original"
+    assert current_backup is not None and current_backup.read_text() == "current"
+
+
+def test_undo_declined_leaves_both_files_untouched(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / "settings.json"
+    backup = tmp_path / "settings.json.backup-20261103-123456"
+    target.write_text("current")
+    backup.write_text("old")
+    restored, new_backup = undo_repair_backup(backup, ask=lambda _p: "n", is_tty=True, say=lambda _s: None)
+    assert not restored and new_backup is None
+    assert target.read_text() == "current"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not preserved on Windows")
 def test_atomic_write_replaces_content_and_keeps_permissions(tmp_path):
     path = tmp_path / "f.json"
     path.write_text("old")

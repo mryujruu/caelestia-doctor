@@ -20,6 +20,7 @@ class Repair:
     path: Path
     description: str
     apply: Callable[[], None]
+    expected: str | None = None
 
 
 @dataclass
@@ -54,10 +55,10 @@ def state_dir() -> Path:
     return Path(os.environ.get("XDG_STATE_HOME") or home() / ".local" / "state")
 
 
-def run(cmd: list[str], timeout: float = 5.0) -> Proc | None:
+def run(cmd: list[str], timeout: float = 5.0, env: dict[str, str] | None = None) -> Proc | None:
     """Run a command. Returns None if the program does not exist."""
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     except FileNotFoundError:
         return None
     except subprocess.TimeoutExpired:
@@ -86,7 +87,7 @@ def short(path) -> str:
     """Show a path with ~ instead of the home directory."""
     h = str(home())
     t = str(path)
-    return "~" + t[len(h):] if h != "/" and t.startswith(h) else t
+    return "~" + t[len(h):] if h != "/" and (t == h or t.startswith(h + os.sep)) else t
 
 
 def write_text_atomic(path: Path, text: str) -> None:

@@ -6,7 +6,7 @@ import difflib
 import re
 from pathlib import Path
 
-from ..utils import FAIL, INFO, OK, WARN, Result, config_dir, read_text, run, short
+from ..utils import FAIL, INFO, OK, WARN, Result, config_dir, have, read_text, run, short
 
 XKB_LIST = Path("/usr/share/X11/xkb/rules/base.lst")
 LAYOUT_RE = re.compile(r"""kb_layout\s*=\s*["']?([^"'\n},]+(?:,[^"'\n},]+)*)""")
@@ -116,7 +116,50 @@ def run_checks() -> list[Result]:
     elif conf.exists():
         results.append(Result("Hyprland config", OK, "using hyprland.conf"))
     else:
-        results.append(Result("Hyprland config", INFO, f"no hyprland.lua / hyprland.conf in {short(hypr)}"))
+        results.append(Result(
+            "Hyprland config", WARN, f"no hyprland.lua / hyprland.conf in {short(hypr)}",
+            "Hyprland will start with its generated fallback config, so your keybinds and Caelestia startup may be missing.",
+            steps=["Review the missing upstream defaults, then answer Y to download only the files you want:",
+                   "$ caelestia-doctor restore --component hypr"],
+        ))
+
+    # Check the active parser's diagnostics when a Hyprland session is available.
+    errors = run(["hyprctl", "configerrors"])
+    if errors is not None and errors.rc == 0:
+        diagnostic = errors.out.strip()
+        lower = diagnostic.lower()
+        if diagnostic and not any(token in lower for token in ("no errors", "no config errors", "no errors found")):
+            results.append(Result(
+                "Hyprland config errors", FAIL, "Hyprland reports configuration errors",
+                "The compositor may have skipped settings or loaded a fallback configuration.",
+                detail=diagnostic,
+                steps=["Correct the reported file and line, then reload and inspect errors:",
+                       "$ hyprctl reload", "$ hyprctl configerrors"],
+            ))
+        else:
+            results.append(Result("Hyprland config errors", OK, "Hyprland reports no configuration errors"))
+    elif errors is not None and errors.rc not in (0, 124):
+        results.append(Result(
+            "Hyprland config errors", INFO, "could not query the active Hyprland session",
+            detail=errors.err or errors.out,
+        ))
+
+    # `hyprctl configerrors` checks the active session. luac is a useful offline
+    # syntax check, but cannot validate Hyprland options or imported modules.
+    if have("luac"):
+        lua_files = [f for f in _config_files(hypr, config_dir() / "caelestia") if f.suffix == ".lua"]
+        for lua_file in lua_files:
+            parsed = run(["luac", "-p", str(lua_file)], timeout=10)
+            if parsed is not None and parsed.rc != 0:
+                results.append(Result(
+                    f"Lua syntax: {lua_file.name}", FAIL, f"{short(lua_file)} has invalid Lua syntax",
+                    "This checks Lua syntax only; use Hyprland's own diagnostics for option and runtime errors.",
+                    detail=parsed.err or parsed.out,
+                    steps=["Fix the syntax error, then reload and inspect Hyprland's diagnostics:",
+                           "$ hyprctl reload", "$ hyprctl configerrors"],
+                ))
+            elif parsed is not None:
+                results.append(Result(f"Lua syntax: {lua_file.name}", OK, f"{short(lua_file)} parses successfully"))
 
     names = layout_names()
     if names is None:

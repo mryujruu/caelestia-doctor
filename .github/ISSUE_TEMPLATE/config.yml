@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Bug in Caelestia itself (not in this tool)
+    url: https://github.com/caelestia-dots/caelestia/issues
+    about: If the shell or dotfiles are broken, report it to the Caelestia project.

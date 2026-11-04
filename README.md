@@ -1,46 +1,44 @@
 # caelestia-doctor
 
-A diagnostic tool for [Caelestia](https://github.com/caelestia-dots) (Hyprland + Quickshell).
-It checks the things that most often go wrong, tells you **what to do about each one**, and
-prints a report you can paste into a GitHub issue.
-
-Checks are **read-only**. An optional command, `caelestia-doctor fix`, can apply a few safe
-repairs, but only the ones you select, and it backs up each file first.
+Diagnose and repair common problems on **Arch-based Linux (Arch, CachyOS)**, **Hyprland** and the **[Caelestia](https://github.com/caelestia-dots) shell**. For every problem it tells you what to do next, and for a few safe cases it can fix the file for you.
 
 > Unofficial community tool. Not affiliated with the Caelestia project.
+> Arabic version: [README.ar.md](README.ar.md)
 
-## What it checks
+## The safety model, in short
 
-- **Versions**: `caelestia -v`, Quickshell, Hyprland and the related Arch packages
-- **`shell.json`**: JSON syntax (with line and column), duplicate keys, and `paths.*` that point to files that do not exist (it spots wrong capital letters, like `wallpapers` vs `Wallpapers`)
-- **Hyprland**: Lua vs `.conf` config, and keyboard layout codes (for example `ar` is not valid, `ara` is)
-- **State files**: `~/.local/state/caelestia/scheme.json` and `wallpaper/path.txt` (see issue #1177)
+| Kind of command | What it does |
+|---|---|
+| `check`, `deep-check`, `logs`, `command-check`, `report`, and every `--dry-run` | **Only read.** They never change anything. |
+| `fix`, `undo`, `restore`, `backup restore`, `packages`, `install` | Change things **only after you confirm**. File edits are backed up first. |
+| `fix --all` | Applies every safe local repair **without asking**. Use it only when you have read `fix --dry-run`. |
 
-Details: [docs/checks.md](docs/checks.md)
+It never removes your files or packages, never updates your whole system, and never runs commands you paste into `command-check`.
 
-## Install (Arch)
+## Install
 
 ```sh
 sudo pacman -S --needed python-pipx
 pipx install git+https://github.com/mryujruu/caelestia-doctor
+pipx ensurepath          # then open a new terminal
+caelestia-doctor --version
 ```
 
-or from a clone: `pipx install .`. Update with `pipx upgrade caelestia-doctor`.
+Update with `pipx upgrade caelestia-doctor`. It needs Python 3.11 or newer.
 
-## Use
+## Quick start
 
 ```sh
-caelestia-doctor            # run all checks, with suggestions
-caelestia-doctor fix        # apply the safe repairs you select
-caelestia-doctor report     # Markdown report to paste into an issue
-caelestia-doctor report -o report.md
-caelestia-doctor --no-color # plain output (NO_COLOR works too)
+caelestia-doctor                # run every check, with suggestions
+caelestia-doctor fix --dry-run  # see what could be repaired, change nothing
+caelestia-doctor fix            # choose repairs, then confirm
+caelestia-doctor report         # a report to paste into a GitHub issue
 ```
 
-Example output:
+Example (shortened):
 
 ```
- ⚠ Warnings (2)
+ ⚠ Warnings (1)
 
  ┌─ shell.json → paths.mediaGif
  │ path does not exist: ~/Pictures/wallpapers/cat.gif
@@ -54,52 +52,79 @@ Example output:
  │   In paths.mediaGif, change ~/Pictures/wallpapers/cat.gif to ~/Pictures/Wallpapers/cat.gif
  │   $ caelestia-doctor fix
  └─
-
- ┌─ Keyboard layout in hyprland.lua
- │ unknown code(s) in kb_layout: ar
- │
- │ What to do
- │   Instead of `ar` you probably want: ara (Arabic)
- │   Edit the kb_layout line in ~/.config/hypr/hyprland.lua, then apply it:
- │   $ hyprctl reload
- └─
-
- ────────────────────────────────────────
- 0 problems  ·  2 warnings  ·  6 ok
 ```
 
-## How `fix` stays safe
+## Commands
 
-- It never runs by itself: `check` and `report` change nothing.
-- It lists each repair, you choose which ones, and it asks once more before touching anything.
-- Every file is copied to `<name>.backup-<date>` first, and the new file is written atomically.
-- It only does repairs with one obvious right answer (an empty `shell.json`, wrong capital letters in a path). It never guesses at your Hyprland config, installs packages, or deletes anything.
-- It refuses to run when it has no terminal (for example inside a script).
+| Command | What it does |
+|---|---|
+| `check` (default) | Runs every check below and shows a **What to do** list under each problem. |
+| `deep-check` | Slower: runs `pacman -Qkk` to find package-owned files that were changed. Changes in `/etc` can be intentional, so it only reports. |
+| `fix [--all] [--dry-run]` | Lists safe repairs, asks which to apply, then asks again. `--dry-run` only previews. |
+| `undo BACKUP` | Restores one backup that `fix` made. It asks first and keeps your current file as another backup. |
+| `restore [--component hypr] [--dry-run]` | Compares your config with Caelestia's official default files, lists the missing ones, and asks **per file** before downloading. |
+| `packages [--component hypr] [--dry-run]` | Audits the packages in Caelestia's manifest and offers to install each missing one. AUR and unlisted packages are shown separately, with a warning to read the PKGBUILD. |
+| `backup list ARCHIVE` | Shows which supported files are inside your own tar backup, without extracting. |
+| `backup restore ARCHIVE [--dry-run]` | Restores selected files from that backup, asking per file. Links and unsupported paths are skipped. |
+| `logs [-o FILE]` | Reads the recent Hyprland and Quickshell logs. Nothing is uploaded. Saving a report asks first. |
+| `command-check --shell fish\|bash --command TEXT` (or `--file FILE`) | Checks the **syntax** of a pasted command with Fish's no-execute mode. It never runs it. Suggests Fish's `set` for simple `name=value` Bash lines, and notices a missing `less` after a pipe. |
+| `install` | Offers to install the optional `less` pager (used by `command-check` hints) with `pacman`, after you confirm. |
+| `report [--format markdown\|json] [-o FILE]` | Prints a report with your home path and username replaced by `~` and `<user>`. |
 
-Reports replace your home path and username with `~` and `<user>`. Read the report before you post it anyway.
+Global option: `--no-color` (or set `NO_COLOR`).
 
-Exit code is `1` if any check FAILs, otherwise `0`.
+## What `check` looks at
 
-## Develop
+- **System:** Arch-based detection (including CachyOS), free disk space, a stuck pacman lock, the pacman database, package-owned files that are missing, and failed system or user services.
+- **Versions:** `caelestia -v`, Quickshell, Hyprland and the related pacman packages.
+- **`shell.json`:** valid JSON (with line and column), duplicate keys, and `paths.*` that point to files that do not exist. It spots wrong capital letters, like `wallpapers` instead of `Wallpapers`.
+- **Hyprland:** Lua or `.conf` config (it uses your Hyprland version to say which one is used), live errors from `hyprctl configerrors`, Lua syntax if `luac` is installed, and keyboard layout codes (`ar` is not valid, `ara` is) with the closest valid suggestion.
+- **Fish:** syntax of `~/.config/fish/config.fish` and Caelestia's `user-config.fish`, using `fish -n`, which does not run the file.
+- **State files:** `scheme.json` and `wallpaper/path.txt` ([upstream issue #1177](docs/upstream-issues.md)).
+
+Details and limits: [docs/checks.md](docs/checks.md).
+
+## Safe repairs (`fix`)
+
+Only repairs with one obviously correct answer exist:
+
+- an **empty `shell.json`** becomes `{}`;
+- a **`paths.*` value** that fails only because of letter case is replaced with the existing path.
+
+Each edit is backed up to `<name>.backup-<date>`, written atomically, and refused if the file changed since the check. Everything else (invalid JSON, keyboard layout codes, missing packages, state files) is explained, not edited, because the right answer depends on you.
+
+## Downloads and the GitHub rate limit
+
+`restore` and `packages` read the current `main` of `caelestia-dots/caelestia`. For a restore run it pins one commit, checks every file against its Git blob hash, refuses paths that leave your home, and never overwrites an existing file.
+
+GitHub limits anonymous API calls. If you see `HTTP 403`, wait a while, or use a read-only token:
 
 ```sh
-pip install pytest
-PYTHONPATH=src python -m pytest
+GITHUB_TOKEN=$(gh auth token) caelestia-doctor restore
 ```
 
-Ideas and new checks are welcome: see "Adding a check" in [docs/checks.md](docs/checks.md).
+The token goes only to `api.github.com` and is never stored.
 
-## العربية
+## Exit codes
 
-أداة تشخيص لمستخدمي Caelestia. بتفحص الإصدارات، وملف `shell.json`، وإعدادات Hyprland (ومنها أكواد لغة الكيبورد)، وملفات الحالة، وبتقولك **تعمل إيه** لكل مشكلة، وبتطلّعلك تقرير جاهز تلصقه في GitHub.
+`0` when no check fails, `1` when at least one fails (warnings do not count), `2` when `fix` needs to ask a question but there is no terminal.
 
-الفحص العادي ما بيعدّلش أي ملف. أمر `fix` بيصلّح حاجتين بس (ملف `shell.json` الفاضي، وحروف كبيرة/صغيرة غلط في المسار)، وبعد ما تختار وتأكّد، وبعد ما يعمل نسخة احتياطية من الملف.
+## Good to know
+
+- It targets Arch-based systems. On other systems it warns and skips what it cannot check.
+- `luac` checks Lua syntax only, not Hyprland option names or plugins.
+- Reports and logs may still hold private details. Read them before sharing.
+- It was developed and tested on a few Arch setups. Please report what it gets wrong.
+
+## Development
 
 ```sh
-caelestia-doctor
-caelestia-doctor fix
-caelestia-doctor report
+pip install -e ".[dev]" pyflakes
+python -m pytest -q
+python -m pyflakes src tests
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

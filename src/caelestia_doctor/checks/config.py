@@ -66,7 +66,7 @@ def make_path_repair(path: Path, text: str, key: str, val: str, better: str) -> 
         json.loads(new_text)  # never write something that is not valid JSON
         write_text_atomic(path, new_text)
 
-    return Repair(path, f"In paths.{key}, change {val} to {new_val}", apply)
+    return Repair(path, f"In paths.{key}, change {val} to {new_val}", apply, expected=text)
 
 
 def _check_file(path: Path, label: str) -> list[Result]:
@@ -79,7 +79,7 @@ def _check_file(path: Path, label: str) -> list[Result]:
                        "An empty file is not valid JSON, and the shell may ignore your settings.",
                        steps=["Put {} in the file, or let `caelestia-doctor fix` do it for you."],
                        repair=Repair(path, "Replace the empty file with an empty JSON object ({})",
-                                     lambda: write_text_atomic(path, "{}\n")))]
+                                     lambda: write_text_atomic(path, "{}\n"), expected=text))]
 
     data, dups, err = parse_json(text)
     if err:
