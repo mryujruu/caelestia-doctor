@@ -93,10 +93,10 @@ def render_text(results: list[Result], color: bool = False, width: int | None = 
         out.append(c("32;1", f" ✔ Passed ({len(passed)})"))
         for r in sorted(passed, key=lambda r: ORDER[r.status]):
             mark = c("32", "✔") if r.status == OK else c("36", "ℹ")
-            line = f"{r.name}: {r.message}"
-            if len(line) > width - 6:
-                line = line[: width - 9] + "..."
-            out.append(f"   {mark} {line}")
+            wrapped = textwrap.wrap(f"{r.name}: {r.message}", width - 7) or [""]
+            out.append(f"   {mark} {wrapped[0]}")
+            for line in wrapped[1:]:
+                out.append(f"     {line}")
         out.append("")
 
     s = summary(results)

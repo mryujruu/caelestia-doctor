@@ -1,3 +1,13 @@
+## 0.6.1
+
+- Fixed: `deep-check` reported a bare "188 altered package-owned files" as a warning, with no way to tell which ones mattered. It now reads every file `pacman -Qkk` lists and sorts it:
+  - **content changed outside /etc** and **missing from disk** are the only things that make a warning, and they are named, with the package and the reason;
+  - changes under `/etc` (your own edits), removed docs and translations, and time, owner or permission differences are counted but not treated as problems;
+  - files that need root to be read are counted separately, with a note to run `sudo pacman -Qkk` to check them too.
+- Added: `deep-check --full` lists every altered file, grouped by category.
+- Improved: long messages in the "Passed" list wrap onto the next line instead of being cut with `...`.
+- Tests: 89 tests (new: the file classification, the warning rules and `--full`).
+
 ## 0.6.0
 
 - Fixed: `installer.py` had an indentation error, so 0.5.0 could not start at all. A new test now imports every module, so this cannot ship again.

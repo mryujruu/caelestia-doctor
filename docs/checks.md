@@ -38,7 +38,18 @@ Every edited file is backed up, written atomically, and checked for changes sinc
 
 `backup restore ARCHIVE --dry-run`, `restore --dry-run`, `packages --dry-run`, and `fix --dry-run` only preview. `packages` reads the current official default-component manifest and distinguishes configured pacman repositories from AUR packages; every install is separately confirmed. AUR build recipes remain subject to the user's review. `report --format json` exports redacted machine-readable results.
 
-`caelestia-doctor deep-check` runs the slower `pacman -Qkk` scan to detect altered package-owned files. Configuration changes can be intentional, especially under `/etc`, so this command reports findings for review and never reinstalls a package automatically.
+`caelestia-doctor deep-check` runs the slower `pacman -Qkk` scan and sorts each altered file by what changed:
+
+| Category | Reasons pacman gives | Counts as a problem? |
+|---|---|---|
+| content changed outside `/etc` | size, MD5/SHA256 checksum, type or symlink mismatch | **Yes (warning)**, named with its package |
+| missing from disk | no such file or directory | **Yes (warning)**, except docs and translations |
+| changed under `/etc` | any | No: usually your own edits |
+| removed docs or translations | missing files under `/usr/share/{doc,man,info,locale,help,gtk-doc}` | No |
+| only time, owner or permissions | modification time, UID, GID or permissions mismatch | No |
+| unreadable without root | permission denied | No, but it could not be checked: run `sudo pacman -Qkk` |
+
+Each file is counted once even when pacman gives several reasons. `deep-check --full` prints every file by category. It only reports; reinstalling a package is your decision.
 
 `caelestia-doctor logs` optionally reads the recent Hyprland rolling log and Caelestia Quickshell log. It does not upload them. Saving a Markdown report requires confirmation, and logs should be reviewed for private details before sharing.
 

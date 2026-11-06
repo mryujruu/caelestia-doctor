@@ -59,7 +59,7 @@ Example (shortened):
 | Command | What it does |
 |---|---|
 | `check` (default) | Runs every check below and shows a **What to do** list under each problem. |
-| `deep-check` | Slower: runs `pacman -Qkk` to find package-owned files that were changed. Changes in `/etc` can be intentional, so it only reports. |
+| `deep-check [--full]` | Slower: runs `pacman -Qkk` and sorts every altered package file. Only **changed content outside `/etc`** and **files missing from disk** are warnings, and they are named. Your `/etc` edits, removed docs and translations, and time or permission differences are counted but not treated as problems. `--full` lists every file by category. It only reports. |
 | `fix [--all] [--dry-run]` | Lists safe repairs, asks which to apply, then asks again. `--dry-run` only previews. |
 | `undo BACKUP` | Restores one backup that `fix` made. It asks first and keeps your current file as another backup. |
 | `restore [--component hypr] [--dry-run]` | Compares your config with Caelestia's official default files, lists the missing ones, and asks **per file** before downloading. |

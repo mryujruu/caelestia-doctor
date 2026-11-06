@@ -148,7 +148,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-color", action="store_true", help="plain output (also set by NO_COLOR)")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("check", help="run all checks and print the result (default)")
-    sub.add_parser("deep-check", help="run the slower pacman checksum/metadata integrity check")
+    dc = sub.add_parser("deep-check", help="run the slower pacman checksum/metadata integrity check")
+    dc.add_argument("--full", action="store_true", help="also list every altered file, grouped by category")
     fp = sub.add_parser("fix", help="show safe repairs and apply the ones you select")
     fp.add_argument("--all", action="store_true", help="apply every deterministic safe repair without prompting")
     fp.add_argument("--dry-run", action="store_true", help="preview available repairs without changing files")
@@ -202,6 +203,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "deep-check":
         results = arch.run_deep_checks()
         print(render_text(results, color=color))
+        if args.full:
+            for r in results:
+                if r.detail:
+                    print(f"\n{r.name}: every file by category\n")
+                    print(r.detail)
         return _exit_code(results)
 
     if args.cmd == "packages":

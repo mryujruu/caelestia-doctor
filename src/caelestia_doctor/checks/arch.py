@@ -90,6 +90,134 @@ def _pacman_files_check() -> Result:
     )
 
 
+# --- pacman -Qkk -------------------------------------------------------------------------------
+
+_MISMATCH = re.compile(r"^(?:warning|error):\s+(?P<pkg>[^:\s]+):\s+(?P<path>/.*?)\s+\((?P<reason>[^()]+)\)\s*$")
+_SUMMARY = re.compile(r"\b\d+\s+total files?,\s*(\d+)\s+altered files?\b", re.IGNORECASE)
+
+# What each pacman reason means. Only real content changes outside /etc deserve a warning.
+_CONTENT = {"size mismatch", "md5 checksum mismatch", "sha256 checksum mismatch", "type mismatch",
+            "symlink path mismatch"}
+_MISSING = {"no such file or directory"}
+_UNREADABLE = {"permission denied"}
+# Files people remove on purpose (documentation and translations), so "missing" is expected there.
+_REMOVABLE = ("/usr/share/doc/", "/usr/share/man/", "/usr/share/info/", "/usr/share/locale/",
+              "/usr/share/help/", "/usr/share/gtk-doc/")
+
+CATEGORY_TITLES = {
+    "content": "content changed outside /etc",
+    "missing": "missing from disk",
+    "config": "changed under /etc (usually your own edits)",
+    "removable": "removed docs or translations",
+    "metadata": "only time, owner or permission differences",
+    "unreadable": "unreadable without root, so not checked",
+}
+# Shown first, and the only ones that make the result a warning.
+ATTENTION = ("content", "missing")
+
+
+def classify_file(path: str, reasons: set[str]) -> str:
+    low = {r.lower() for r in reasons}
+    if low & _UNREADABLE:
+        return "unreadable"
+    if low & _MISSING:
+        return "removable" if path.startswith(_REMOVABLE) else "missing"
+    if path.startswith("/etc/") or path == "/etc":
+        return "config"
+    if low & _CONTENT:
+        return "content"
+    return "metadata"
+
+
+def parse_pacman_qkk(output: str) -> dict:
+    """Group `pacman -Qkk` output by file and category.
+
+    Returns {"files": {(pkg, path): set(reasons)}, "groups": {category: [(pkg, path, reasons)]},
+    "summary_altered": int} where summary_altered is what pacman itself counted.
+    """
+    files: dict[tuple[str, str], set[str]] = {}
+    summary = 0
+    for line in output.splitlines():
+        m = _MISMATCH.match(line.strip())
+        if m:
+            files.setdefault((m["pkg"], m["path"]), set()).add(m["reason"].strip())
+            continue
+        m = _SUMMARY.search(line)
+        if m:
+            summary += int(m.group(1))
+    groups: dict[str, list] = {k: [] for k in CATEGORY_TITLES}
+    for (pkg, path), reasons in sorted(files.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        groups[classify_file(path, reasons)].append((pkg, path, sorted(reasons)))
+    return {"files": files, "groups": groups, "summary_altered": summary}
+
+
+def _detail(groups: dict, limit: int = 60) -> str:
+    lines: list[str] = []
+    for cat in (*ATTENTION, "config", "removable", "metadata", "unreadable"):
+        items = groups[cat]
+        if not items:
+            continue
+        lines.append(f"== {CATEGORY_TITLES[cat]} ({len(items)})")
+        for pkg, path, reasons in items[:limit]:
+            lines.append(f"{path}  [{pkg}: {', '.join(reasons)}]")
+        if len(items) > limit:
+            lines.append(f"... and {len(items) - limit} more")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def summarize_pacman_qkk(output: str) -> Result | None:
+    """Turn `pacman -Qkk` output into one result, or None when nothing was altered."""
+    data = parse_pacman_qkk(output)
+    groups, total = data["groups"], len(data["files"])
+
+    if total == 0:
+        altered = data["summary_altered"]
+        if not altered:
+            return None
+        # pacman counted files but printed no per-file lines we understand: report it as before.
+        return Result(
+            "Pacman file integrity", WARN, f"pacman reports {altered} altered package-owned file(s)",
+            "Some changes, especially under /etc, may be intentional. Review the package and file before reinstalling.",
+            detail="\n".join(output.splitlines()[:120]),
+            steps=["Inspect a specific package:", "$ pacman -Qkk <package>",
+                   "Only reinstall a confirmed damaged package after reviewing the diff."],
+        )
+
+    parts = [f"{len(groups[c])} {CATEGORY_TITLES[c]}" for c in (*ATTENTION, "config", "removable", "metadata", "unreadable")
+             if groups[c]]
+    message = f"pacman lists {_plural(total, 'altered file')}: " + "; ".join(parts)
+    detail = _detail(groups)
+    attention = [item for c in ATTENTION for item in groups[c]]
+
+    if not attention:
+        return Result(
+            "Pacman file integrity", INFO, message + ". None of these need action by themselves.",
+            detail=detail,
+            steps=["See every file by category:", "$ caelestia-doctor deep-check --full"],
+        )
+
+    steps = ["These files need a look:"]
+    for pkg, path, reasons in attention[:10]:
+        steps.append(f"{path} (package {pkg}): {', '.join(reasons)}")
+    if len(attention) > 10:
+        steps.append(f"... and {len(attention) - 10} more. List them all with: caelestia-doctor deep-check --full")
+    steps += ["Compare the package's files with what is on disk:", f"$ pacman -Qkk {attention[0][0]}",
+              "Reinstall a package only after you have confirmed it is damaged and not changed on purpose."]
+    if groups["unreadable"]:
+        steps += ["Some files cannot be read without root. To check them too (read-only):", "$ sudo pacman -Qkk"]
+    return Result(
+        "Pacman file integrity", WARN, message,
+        "Changes under /etc, timestamps, owners and permissions are common and usually harmless. "
+        "Changed content or missing files elsewhere are worth reviewing.",
+        detail=detail, steps=steps,
+    )
+
+
 def run_deep_checks() -> list[Result]:
     """Run pacman's slower checksum/metadata verification for installed package files."""
     if not have("pacman"):
@@ -103,20 +231,10 @@ def run_deep_checks() -> list[Result]:
         return [Result("Pacman file integrity", INFO, "deep package check timed out after 240 seconds",
                        steps=["Run this check again when the system is idle:", "$ caelestia-doctor deep-check"])]
     output = "\n".join(part for part in (proc.out, proc.err) if part)
-    altered = 0
-    for line in output.splitlines():
-        match = re.search(r"\b\d+\s+total files?,\s*(\d+)\s+altered files?\b", line, re.IGNORECASE)
-        if match:
-            altered += int(match.group(1))
+    result = summarize_pacman_qkk(output)
+    if result is not None:
+        return [result]
     details = "\n".join(output.splitlines()[:120])
-    if altered:
-        return [Result(
-            "Pacman file integrity", WARN,
-            f"pacman reports {altered} altered package-owned file(s)",
-            "Some changes, especially under /etc, may be intentional. Review the package and file before reinstalling.",
-            detail=details,
-            steps=["Inspect a specific package:", "$ pacman -Qkk <package>", "Only reinstall a confirmed damaged package after reviewing the diff."],
-        )]
     if proc.rc != 0:
         return [Result("Pacman file integrity", INFO, f"pacman -Qkk could not finish (exit {proc.rc})",
                        detail=details, steps=["$ pacman -Qkk"])]
